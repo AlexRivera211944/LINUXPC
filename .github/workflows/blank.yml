@@ -1,0 +1,62 @@
+name: setup KDE Plasma + Tailscale + xrdp
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-gui-runner:
+    runs-on: ubuntu-latest
+
+    env:
+      USERNAME: runner
+      PASSWORD: runner
+      TAILSCALE_HOSTNAME: gh-plasma-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure runner user has sudo
+        run: |
+          echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
+          echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USERNAME}
+
+      - name: Install KDE Plasma + xrdp
+        run: |
+          echo ">>> Installing KDE Plasma Desktop..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            kde-plasma-desktop xorg dbus-x11 xrdp
+
+          echo "exec startplasma-x11" | sudo tee /home/${USERNAME}/.xsession
+          echo "exec startplasma-x11" | sudo tee /home/${USERNAME}/.xinitrc
+          sudo chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession /home/${USERNAME}/.xinitrc
+
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+
+      - name: Install Tailscale (interactive login)
+        run: |
+          echo ">>> Installing Tailscale..."
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+
+          echo ">>> Running tailscale up (LOGIN LINK WILL APPEAR BELOW)"
+          sudo tailscale up --hostname "${TAILSCALE_HOSTNAME}"
+
+          echo ">>> Tailscale IPv4:"
+          sudo tailscale ip -4 || true
+
+      - name: Connection info + Keep alive
+        run: |
+          echo "=== FINAL CONNECTION INFO ==="
+          echo "USERNAME: ${USERNAME}"
+          echo "PASSWORD: ${PASSWORD}"
+          echo
+          echo "Tailscale IP:"
+          sudo tailscale ip -4 || true
+          echo
+          echo "Connect using any RDP client (3389)"
+          echo ">>> Keeping runner alive..."
+          while true; do sleep 600; done
