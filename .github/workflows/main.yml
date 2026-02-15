@@ -1,0 +1,99 @@
+name: Setup KDE Plasma Runner + Tailscale + VNC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-gui-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # max practical on GitHub-hosted; adjust if needed
+
+    env:
+      USERNAME: runner
+      # Prefer secrets for these in real use:
+      PASSWORD: runner
+      TAILSCALE_HOSTNAME: gh-kde-vnc-${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask password in logs
+        run: |
+          echo "::add-mask::${PASSWORD}"
+
+      - name: Ensure runner user has sudo (optional)
+        run: |
+          echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
+          echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USERNAME}
+          sudo chmod 0440 /etc/sudoers.d/${USERNAME}
+
+      - name: Install KDE Plasma + VNC server
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            kde-plasma-desktop konsole dbus-x11 xorg \
+            tigervnc-standalone-server tigervnc-common tigervnc-tools
+
+          # VNC password + startup script
+          sudo -u ${USERNAME} mkdir -p /home/${USERNAME}/.vnc
+          echo "${PASSWORD}" | sudo -u ${USERNAME} vncpasswd -f > /home/${USERNAME}/.vnc/passwd
+          sudo chmod 600 /home/${USERNAME}/.vnc/passwd
+          sudo chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
+
+          # Plasma via TigerVNC uses ~/.vnc/xstartup
+          cat <<'EOF' | sudo tee /home/${USERNAME}/.vnc/xstartup >/dev/null
+          #!/bin/sh
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          export XDG_SESSION_TYPE=x11
+          export KDE_FULL_SESSION=true
+          export XDG_CURRENT_DESKTOP=KDE
+
+          # Start Plasma in a DBus session
+          exec dbus-launch --exit-with-session startplasma-x11
+          EOF
+          sudo chmod +x /home/${USERNAME}/.vnc/xstartup
+          sudo chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc/xstartup
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+
+      - name: Connect Tailscale (recommended: auth key)
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          if [ -n "${TS_AUTHKEY}" ]; then
+            sudo tailscale up --authkey "${TS_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
+          else
+            echo "No TS_AUTHKEY provided. Falling back to interactive login."
+            echo ">>> Run tailscale up — LOGIN LINK WILL APPEAR BELOW"
+            sudo tailscale up --hostname "${TAILSCALE_HOSTNAME}"
+          fi
+
+          echo ">>> Tailscale IPv4:"
+          sudo tailscale ip -4 || true
+
+      - name: Start VNC + Show connection info
+        run: |
+          # Clean any stale server from previous attempts
+          sudo -u ${USERNAME} vncserver -kill :1 >/dev/null 2>&1 || true
+
+          echo ">>> Starting VNC server..."
+          sudo -u ${USERNAME} vncserver :1 \
+            -geometry 1280x800 \
+            -depth 24 \
+            -localhost no
+
+          TAILSCALE_IP=$(sudo tailscale ip -4 | head -n1)
+
+          echo "=== CONNECTION INFO ==="
+          echo "VNC USER: ${USERNAME}"
+          echo "VNC PASS: (masked)"
+          echo "VNC ADDRESS: ${TAILSCALE_IP}:5901"
+          echo
+          echo ">>> Keeping runner alive..."
+          while true; do sleep 600; done
