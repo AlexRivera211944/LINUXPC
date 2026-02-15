@@ -1,4 +1,4 @@
-name: Setup KDE Plasma Runner + Tailscale + VNC
+name: Setup KDE Plasma Runner + Tailscale + VNC + Web VNC
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
           sudo chmod 600 "/home/${USERNAME}/.vnc/passwd"
           sudo chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}/.vnc"
 
-          # TigerVNC startup file (more reliable than .xsession here)
+          # TigerVNC startup for Plasma (reliable)
           sudo tee "/home/${USERNAME}/.vnc/xstartup" >/dev/null <<'EOF'
           #!/bin/sh
           unset SESSION_MANAGER
@@ -51,24 +51,29 @@ jobs:
           sudo chmod +x "/home/${USERNAME}/.vnc/xstartup"
           sudo chown "${USERNAME}:${USERNAME}" "/home/${USERNAME}/.vnc/xstartup"
 
+      - name: Install noVNC (Web VNC)
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq novnc websockify
+          sudo ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+
       - name: Install Tailscale (interactive login)
         shell: bash
         run: |
           curl -fsSL https://tailscale.com/install.sh | sudo sh
-
           echo "Run tailscale up - login link will appear below"
           sudo tailscale up --hostname "${TAILSCALE_HOSTNAME}"
-
           echo "Tailscale IPv4:"
           sudo tailscale ip -4 || true
 
-      - name: Start VNC + Show connection info
+      - name: Start VNC + Web VNC + Show connection info
         shell: bash
         run: |
           # Kill old server if any
           sudo -u "${USERNAME}" vncserver -kill :1 >/dev/null 2>&1 || true
 
-          echo "Starting VNC server..."
+          echo "Starting VNC server on :1 (5901)..."
           sudo -u "${USERNAME}" vncserver :1 \
             -geometry 1280x800 \
             -depth 24 \
@@ -76,10 +81,14 @@ jobs:
 
           TAILSCALE_IP="$(sudo tailscale ip -4 | head -n1 || true)"
 
+          echo "Starting noVNC on 6080 (web -> 5901)..."
+          sudo nohup websockify --web=/usr/share/novnc/ 6080 localhost:5901 >/tmp/novnc.log 2>&1 &
+
           echo "=== CONNECTION INFO ==="
           echo "VNC USER: ${USERNAME}"
           echo "VNC PASS: ${PASSWORD}"
-          echo "VNC ADDRESS: ${TAILSCALE_IP}:5901"
-
+          echo "Native VNC: ${TAILSCALE_IP}:5901"
+          echo "Web VNC:    http://${TAILSCALE_IP}:6080"
+          echo
           echo "Keeping runner alive..."
           while true; do sleep 600; done
