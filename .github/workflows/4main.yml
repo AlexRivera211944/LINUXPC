@@ -1,0 +1,66 @@
+name: Windows RDP over Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-rdp:
+    runs-on: windows-latest
+
+    steps:
+      - name: Download Tailscale
+        shell: powershell
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
+            -OutFile "$env:TEMP\tailscale.exe"
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          Start-Process `
+            -FilePath "$env:TEMP\tailscale.exe" `
+            -ArgumentList "/quiet" `
+            -Wait
+
+      - name: Connect Tailscale
+        shell: powershell
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          & "C:\Program Files\Tailscale\tailscale.exe" up `
+            --authkey $env:TS_AUTHKEY `
+            --hostname "gh-win-${{ github.run_id }}"
+
+      - name: Enable RDP + Create User
+        shell: powershell
+        run: |
+          $username = "runner"
+          $password = "P@ssw0rd123!"
+
+          net user $username $password /add
+          net localgroup administrators $username /add
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" -Value 0
+
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+
+          Write-Host ""
+          Write-Host "==============================="
+          Write-Host "RDP CONNECTION INFO"
+          Write-Host "IP: $ip"
+          Write-Host "User: $username"
+          Write-Host "Pass: $password"
+          Write-Host "Port: 3389"
+          Write-Host "==============================="
+          Write-Host ""
+
+      - name: Keep Runner Alive
+        shell: powershell
+        run: |
+          Write-Host "Windows runner alive..."
+          while ($true) { Start-Sleep -Seconds 600 }
